@@ -1,5 +1,5 @@
-// index.js - מעודכן לפי התסריט שלך
-// הערות בעברית נמצאות בתוך הקוד להסבר כל חלק
+// index.js - גרסה מעודכנת: שולח רק את הודעת הברכה הראשונית לפעם הראשונה
+// הערות בעברית בתוך הקוד להסבר כל חלק
 const {
   default: makeWASocket,
   DisconnectReason,
@@ -12,14 +12,14 @@ const qrcode = require('qrcode-terminal');
 // admin JID - הכנס כאן את ה-JID של המנהל (בפורמט בינלאומי ללא סימנים)
 const adminJid = '972559555800@s.whatsapp.net';
 
-// ---------------------------
-// נתונים בזיכרון להרצת הבוט
-// ---------------------------
+// ---------------------------------
+// זיכרון ריצה
+// ---------------------------------
 // משתמשים שסומנו כ"לא מעוניין" - אל תענה להם יותר
 const infoSentUsers = new Set();
 // משתמשים שעוברים תהליך מילוי טופס - object keyed by jid
 const formUsers = {};
-// משתמשים שכבר קיבלו את הודעת הברכה הראשונית והתפריט
+// משתמשים שכבר קיבלו את הודעת הברכה הראשונית
 const greetedUsers = new Set();
 
 async function connectToWhatsApp() {
@@ -65,7 +65,7 @@ async function connectToWhatsApp() {
         return;
       }
 
-      // קבלת טקסט גולמי (פשוטות - תומך בהודעות טקסט רגילות וב-extendedText)
+      // קבלת טקסט גולמי (תומך בהודעות טקסט רגילות וב-extendedText)
       const rawText = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
       const t = (rawText || '').toString().toLowerCase().trim();
       console.log('Incoming message from:', jid, '| raw:', rawText, '| normalized:', t);
@@ -121,10 +121,9 @@ async function connectToWhatsApp() {
         return; // לא שולחים שום הודעה חזרה
       }
 
-      // אם המשתמש טרם קיבל הודעת ברכה ותפריט - שלח אותם כמשתמש חדש
+      // אם המשתמש טרם קיבל הודעת ברכה - שלח רק את הודעת הברכה הראשונית
       if (!greetedUsers.has(jid)) {
-        await sendInitialGreeting(sock, jid);
-        await sendWelcomeMenu(sock, jid);
+        await sendInitialGreeting(sock, jid); // עכשיו שולחים רק את הברכה הראשונית
         greetedUsers.add(jid);
         return;
       }
@@ -139,10 +138,10 @@ async function connectToWhatsApp() {
   return sock;
 }
 
-// ---------------------------
+// ---------------------------------
 // שליחת הודעת פתיחה ראשונית למשתמש חדש
-// בהתאם לתסריט: כל משתמש חדש מקבל הודעה זו
-// ---------------------------
+// בהתאם לתסריט: כל משתמש חדש מקבל הודעה זו רק פעם אחת
+// ---------------------------------
 async function sendInitialGreeting(sock, jid) {
   // הודעה ראשונית כפי שביקשת
   const greeting = "שלום! אני בוט אוטומטי לרישום פניות. אם ברצונך להשאיר פניה, השב 'מעוניין'. אם לא מעוניין - השב 'לא מעוניין'.";
@@ -154,11 +153,11 @@ async function sendInitialGreeting(sock, jid) {
   }
 }
 
-// ---------------------------
-// שולח LIST אינטראקטיבי + טקסט גיבוי
-// ---------------------------
+// ---------------------------------
+// פונקציה לשולחת LIST אינטראקטיבי + טקסט גיבוי
+// נשמרת למקרה שהמשתמש יבקש "menu" מאוחר יותר
+// ---------------------------------
 async function sendWelcomeMenu(sock, jid) {
-  // הערות בעברית: פה אנו שולחים את התפריט הראשי כ-LIST - ואם זה לא נתמך נתן fallback טקסט
   const listMsg = {
     text: '👋 שלום וברוך הבא!\nבחר פעולה:',
     footer: 'בוט רישום פניות',
@@ -186,9 +185,9 @@ async function sendWelcomeMenu(sock, jid) {
   }
 }
 
-// ---------------------------
+// ---------------------------------
 // עיבוד בחירת תפריט
-// ---------------------------
+// ---------------------------------
 async function processMenuSelection(sock, jid, selectedId) {
   console.log('processMenuSelection', jid, selectedId);
   if (selectedId === 'form_request') {
@@ -205,17 +204,9 @@ async function processMenuSelection(sock, jid, selectedId) {
   }
 }
 
-// ---------------------------
+// ---------------------------------
 // תהליך מילוי הטופס - 4 שאלות + אישור/עריכה
-// שלבים:
-// step 1 - name
-// step 2 - address
-// step 3 - phone
-// step 4 - details (פירוט)
-// step 'confirm' - שליחת סיכום ובקשה לאישור או שינוי
-// step 'edit_select' - שואל איזה שדה לשנות
-// step 'editing' - מקבל את הערך החדש ואז חוזר ל-'confirm'
-// ---------------------------
+// ---------------------------------
 async function handleFormProcess(sock, jid, msg) {
   const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
   const t = (text || '').toString().trim();
@@ -226,9 +217,8 @@ async function handleFormProcess(sock, jid, msg) {
   const confirmKeywords = ['כן', 'מאשר', 'אישור', 'ok', 'בסדר', 'כן!'];
   const changeKeywords = ['שנה', 'ערוך', 'לשנות', 'לא', 'שינוי'];
 
-  // אם אנחנו בצעדים מספריים
+  // שלבים מספריים
   if (userForm.step === 1) {
-    // שלב שם
     userForm.data.name = t;
     userForm.step = 2;
     await sock.sendMessage(jid, { text: '📍 תודה. אנא כתוב את הכתובת (רחוב, מספר, עיר):' });
@@ -236,7 +226,6 @@ async function handleFormProcess(sock, jid, msg) {
   }
 
   if (userForm.step === 2) {
-    // שלב כתובת
     userForm.data.address = t;
     userForm.step = 3;
     await sock.sendMessage(jid, { text: '📞 עכשיו אנא כתוב את מספר הטלפון שלך:' });
@@ -244,7 +233,6 @@ async function handleFormProcess(sock, jid, msg) {
   }
 
   if (userForm.step === 3) {
-    // שלב טלפון
     userForm.data.phone = t;
     userForm.step = 4;
     await sock.sendMessage(jid, { text: '✉️ כעת פרט את הפניה בקצרה (תיאור הבקשה):' });
@@ -252,7 +240,6 @@ async function handleFormProcess(sock, jid, msg) {
   }
 
   if (userForm.step === 4) {
-    // שלב פירוט פניה - לאחריו נעבור למסך סיכום ואישור
     userForm.data.message = t;
     userForm.step = 'confirm';
     await sendSummaryAndAskConfirmation(sock, jid, userForm.data);
@@ -263,26 +250,22 @@ async function handleFormProcess(sock, jid, msg) {
   if (userForm.step === 'confirm') {
     const lower = t.toLowerCase();
     if (confirmKeywords.includes(lower) || confirmKeywords.includes(t)) {
-      // המשתמש מאשר - שמירה ושליחה למנהל
       await saveAndNotifyAdmin(sock, jid, userForm.data);
       delete formUsers[jid];
       return;
     }
     if (changeKeywords.includes(lower) || changeKeywords.includes(t)) {
-      // משתמש רוצה לשנות - נשאל איזה שדה לשנות
       userForm.step = 'edit_select';
       const editOptions = 'איזה שדה ברצונך לשנות? כתוב: שם / כתובת / טלפון / פירוט';
       await sock.sendMessage(jid, { text: editOptions });
       return;
     }
-    // אם לא ברור - נבקש תשובה ברורה
     await sock.sendMessage(jid, { text: 'לא הבנתי. האם לאשר את הפרטים או לשנות? כתוב "כן" לאישור או "שנה" לעריכה.' });
     return;
   }
 
   if (userForm.step === 'edit_select') {
     const lower = t.toLowerCase();
-    // קבלת השדה המבוקש לעריכה
     if (lower.includes('שם')) {
       userForm.editingField = 'name';
       userForm.step = 'editing';
@@ -312,24 +295,21 @@ async function handleFormProcess(sock, jid, msg) {
   }
 
   if (userForm.step === 'editing') {
-    // עדכון השדה שנבחר
     const field = userForm.editingField;
     if (field) {
       userForm.data[field] = t;
       delete userForm.editingField;
       userForm.step = 'confirm';
-      // לאחר העדכון - מציגים שוב סיכום ובקשת אישור
       await sendSummaryAndAskConfirmation(sock, jid, userForm.data);
       return;
     } else {
-      // מצב תקלה - נבקש לבחור שדה שוב
       userForm.step = 'edit_select';
       await sock.sendMessage(jid, { text: 'אירעה שגיאה קטנה. איזה שדה תרצה לשנות? (שם/כתובת/טלפון/פירוט)' });
       return;
     }
   }
 
-  // אם הגענו לכאן - אין מצב ידוע; ננקה ונציג הודעת שגיאה
+  // במקרה של מצב לא ידוע - ננקה ונשיב למשתמש כיצד להמשיך
   console.log('Unknown form step for user', jid, userForm);
   delete formUsers[jid];
   await sock.sendMessage(jid, { text: 'אירעה שגיאה בתהליך. נא לשלוח "menu" כדי להתחיל שוב.' });
@@ -385,7 +365,7 @@ async function saveAndNotifyAdmin(sock, jid, data) {
     console.error('Failed to write form_data.json:', e?.message || e);
   }
 
-  // שליחה למנהל - הטקסט באנגלית או בעברית? נשלח בעברית כאן אבל הלוג למערכת באנגלית
+  // שליחת הודעה למנהל - הלוג שיישלח הוא באנגלית
   const adminText = [
     '📬 New request received:',
     `User JID: ${entry.jid}`,
@@ -412,9 +392,7 @@ async function saveAndNotifyAdmin(sock, jid, data) {
   }
 }
 
-// ---------------------------
 // פקודות מיוחדות - ping, help, menu
-// ---------------------------
 async function handleSpecialCommands(sock, jid, text) {
   if (!text) return false;
   if (text === 'ping') {
@@ -427,6 +405,7 @@ async function handleSpecialCommands(sock, jid, text) {
     return true;
   }
   if (text === 'menu') {
+    // שליחת התפריט רק במידה והמשתמש ביקש אותו במפורש
     await sendWelcomeMenu(sock, jid);
     return true;
   }
