@@ -1,4 +1,4 @@
-// index.js - גרסה מעודכנת: שולח רק את הודעת הברכה הראשונית לפעם הראשונה
+// index.js - גרסה מעודכנת: תפריט אינטראקטיבי יפה בעברית
 // הערות בעברית בתוך הקוד להסבר כל חלק
 const {
   default: makeWASocket,
@@ -11,6 +11,11 @@ const qrcode = require('qrcode-terminal');
 
 // admin JID - הכנס כאן את ה-JID של המנהל (בפורמט בינלאומי ללא סימנים)
 const adminJid = '972559555800@s.whatsapp.net';
+
+// קישור לאתר שלך (החלף לקישור האמיתי)
+const websiteUrl = 'https://www.example.com';
+// קישור לתקנון (החלף לקישור האמיתי)
+const termsUrl = 'https://www.example.com/terms';
 
 // ---------------------------------
 // זיכרון ריצה
@@ -26,7 +31,10 @@ const greetedUsers = new Set();
 // טיימרים לניהול סשן טופס
 // ---------------------------------
 const formTimeouts = {}; // { jid: timeoutId }
-const FORM_SESSION_TIMEOUT = 0.5 * 60 * 1000; // 10 דקות (ניתן לשנות)
+const FORM_SESSION_TIMEOUT = 10 * 60 * 1000; // 10 דקות (ניתן לשנות)
+
+const greetingTimers = {}; // { jid: timestamp של הפעם האחרונה שהברכה נשלחה }
+const GREETING_COOLDOWN = 60 * 60 * 1000; // 10 דקות
 
 // אתחול/הפעלת טיימר לסשן חדש
 async function startFormSession(sock, jid) {
@@ -146,7 +154,7 @@ async function connectToWhatsApp() {
 
       // מילות מפתח חופשיות לתחילת הטופס או לסימון "לא מעונין"
       const wantsKeywords = ['1', 'מעונין', 'מעוניין', 'מעונין לפתוח פניה', 'מעוניין לפתוח פניה', 'טופס', 'השאר פניה', 'מעוניין לפתוח פנייה', 'מעוניין לפתוח פניה'];
-      const noKeywords = ['2', 'לא מעונין', 'לא מעוניין', 'לא מעונין לפתוח פניה', 'לא מעוניין לפתוח פניה', 'אין'];
+      const noKeywords = ['2', 'לא מעונין', 'הסר ', 'בטל', 'לא', 'אין'];
 
       if (wantsKeywords.includes(t)) {
         await processMenuSelection(sock, jid, 'form_request');
@@ -159,11 +167,14 @@ async function connectToWhatsApp() {
         return; // לא שולחים שום הודעה חזרה
       }
 
-      // אם המשתמש טרם קיבל הודעת ברכה - שלח רק את הודעת הברכה הראשונית
-      if (!greetedUsers.has(jid)) {
-        await sendInitialGreeting(sock, jid); // עכשיו שולחים רק את הברכה הראשונית
+      const now = Date.now();
+      const lastSent = greetingTimers[jid] || 0;
+      if (now - lastSent > GREETING_COOLDOWN) {
+        await sendInteractiveMenu(sock, jid); // שינוי כאן - שליחת התפריט הראשון
+        greetingTimers[jid] = now;
         greetedUsers.add(jid);
-        return;
+      } else {
+        console.log('Greeting recently sent to', jid, '- skipping.');
       }
 
       // בכל שאר המקרים - אין תגובה (כל ההודעות שלא מתאימות ל-flow לא מקבלות תגובה)
@@ -177,50 +188,94 @@ async function connectToWhatsApp() {
 }
 
 // ---------------------------------
-// שליחת הודעת פתיחה ראשונית למשתמש חדש
-// בהתאם לתסריט: כל משתמש חדש מקבל הודעה זו רק פעם אחת
+// שליחת תפריט אינטראקטיבי יפה (הודעה ראשונה)
 // ---------------------------------
-async function sendInitialGreeting(sock, jid) {
-  // הודעה ראשונית כפי שביקשת
-  const greeting = "שלום! אני בוט אוטומטי לרישום פניות. אם ברצונך להשאיר פניה, השב 'מעוניין'. אם לא מעוניין - השב 'לא מעוניין'.";
-  try {
-    await sock.sendMessage(jid, { text: greeting });
-    console.log('Sent initial greeting to:', jid);
-  } catch (e) {
-    console.warn('Failed to send initial greeting to', jid, e?.message || e);
-  }
-}
-
-// ---------------------------------
-// פונקציה לשולחת LIST אינטראקטיבי + טקסט גיבוי
-// נשמרת למקרה שהמשתמש יבקש "menu" מאוחר יותר
-// ---------------------------------
-async function sendWelcomeMenu(sock, jid) {
+async function sendInteractiveMenu(sock, jid) {
+  // ניסיון ראשון - שליחת LIST אינטראקטיבי
   const listMsg = {
-    text: '👋 שלום וברוך הבא!\nבחר פעולה:',
-    footer: 'בוט רישום פניות',
-    title: 'תפריט ראשי',
-    buttonText: 'פתח תפריט',
-    sections: [
+    text: '🤖 שלום! אני בוט אוטומטי לרישום פניות\n\nבחר מה תרצה לעשות:',
+    footer: 'בוט רישום פניות | צוות התמיכה',
+    title: '📋 תפריט ראשי',
+    buttonText: '📝 בחר פעולה',
+    sections: [ 
       {
-        title: 'אפשרויות',
+        title: '🎯 פעולות זמינות',
         rows: [
-          { title: '1) 📝 מעונין לפתוח פניה', rowId: 'form_request' },
-          { title: '2) ℹ️ לא מעונין לפתוח פניה', rowId: 'info_request' }
+          { 
+            title: '📝 פתיחת פניה חדשה', 
+            description: 'למילוי טופס פניה חדש',
+            rowId: 'form_request' 
+          },
+          { 
+            title: '🌐 קישור לאתר', 
+            description: 'מעבר לאתר הרשמי שלנו',
+            rowId: 'website_link' 
+          },
+          { 
+            title: '📜 תקנון השירות', 
+            description: 'קריאת התקנון וההנחיות',
+            rowId: 'terms_link' 
+          },
+          { 
+            title: '❌ הסר אותי מהרשימה', 
+            description: 'הפסקת קבלת הודעות מהבוט',
+            rowId: 'remove_me' 
+          }
         ]
       }
     ]
   };
 
-  const fallback = 'בחר אפשרות:\n1) מעונין לפתוח פניה\n2) לא מעונין לפתוח פניה\nאו כתוב "menu" כדי להציג שוב את התפריט.';
+  // טקסט גיבוי למקרה שה-LIST לא עובד
+  const fallbackText = `🤖 שלום! אני בוט אוטומטי לרישום פניות
+
+📋 *תפריט ראשי:*
+
+1️⃣ פתיחת פניה חדשה - כתוב *"פניה"*
+2️⃣ קישור לאתר - כתוב *"אתר"*  
+3️⃣ תקנון השירות - כתוב *"תקנון"*
+4️⃣ הסר אותי - כתוב *"הסר"*
+
+💡 *טיפ:* ניתן גם לכתוב "menu" בכל זמן להצגת התפריט שוב`;
+
   try {
+    // ניסיון שליחת LIST אינטראקטיבי
     await sock.sendMessage(jid, { listMessage: listMsg });
-    await sock.sendMessage(jid, { text: fallback });
-    console.log('Sent listMessage + fallback to:', jid);
+    console.log('Sent interactive list menu to:', jid);
   } catch (e) {
-    console.warn('listMessage failed - sending fallback text only:', e?.message || e);
-    await sock.sendMessage(jid, { text: fallback });
+    console.warn('Interactive list failed, sending buttons fallback:', e?.message);
+    
+    // גיבוי - כפתורי אינטראקציה פשוטים
+    try {
+      const buttonsMsg = {
+        text: '🤖 שלום! אני בוט אוטומטי לרישום פניות\n\nבחר מה תרצה לעשות:',
+        footer: 'בוט רישום פניות | צוות התמיכה',
+        buttons: [
+          { buttonId: 'form_request', buttonText: { displayText: '📝 פתיחת פניה' }, type: 1 },
+          { buttonId: 'website_link', buttonText: { displayText: '🌐 אתר' }, type: 1 },
+          { buttonId: 'terms_link', buttonText: { displayText: '📜 תקנון' }, type: 1 }
+        ],
+        headerType: 1
+      };
+      
+      await sock.sendMessage(jid, { buttonsMessage: buttonsMsg });
+      console.log('Sent buttons menu to:', jid);
+    } catch (e2) {
+      console.warn('Buttons also failed, sending text fallback:', e2?.message);
+      
+      // גיבוי אחרון - טקסט פשוט
+      await sock.sendMessage(jid, { text: fallbackText });
+      console.log('Sent text fallback menu to:', jid);
+    }
   }
+}
+
+// ---------------------------------
+// התפריט הישן (נשמר למקרה של בקשת "menu")
+// ---------------------------------
+async function sendWelcomeMenu(sock, jid) {
+  // כאן נשלח את אותו תפריט כמו בהודעה הראשונה
+  await sendInteractiveMenu(sock, jid);
 }
 
 // ---------------------------------
@@ -228,20 +283,40 @@ async function sendWelcomeMenu(sock, jid) {
 // ---------------------------------
 async function processMenuSelection(sock, jid, selectedId) {
   console.log('processMenuSelection', jid, selectedId);
+  
   if (selectedId === 'form_request') {
     // אתחול טופס חדש - שלב 1: שם מלא
     formUsers[jid] = { step: 1, data: {} };
-    await sock.sendMessage(jid, { text: '✍️ מצוין! מה השם המלא שלך?' });
+    await sock.sendMessage(jid, { text: '✍️ מצוין! בואו נתחיל במילוי הפניה.\n\n👤 *שלב 1/4:* מה השם המלא שלך?' });
 
     // אתחול טיימר סשן
     await startFormSession(sock, jid);
-  } else if (selectedId === 'info_request') {
-    // משתמש בחר "לא מעונין" - נסמן אותו ולא ייענה שוב
+    
+  } else if (selectedId === 'website_link') {
+    // שליחת קישור לאתר
+    await sock.sendMessage(jid, { 
+      text: `🌐 *האתר הרשמי שלנו:*\n\n${websiteUrl}\n\n💡 לחץ על הקישור כדי לגלוש באתר` 
+    });
+    
+  } else if (selectedId === 'terms_link') {
+    // שליחת קישור לתקנון
+    await sock.sendMessage(jid, { 
+      text: `📜 *תקנון השירות:*\n\n${termsUrl}\n\n📖 לחץ על הקישור לקריאת התקנון המלא` 
+    });
+    
+  } else if (selectedId === 'remove_me') {
+    // משתמש בחר "הסר אותי" - נסמן אותו ולא נענה שוב
     infoSentUsers.add(jid);
-    console.log('User selected not interested - marked and will not be replied to:', jid);
-    // לפי התסריט - לא שולחים הודעה במענה
+    await sock.sendMessage(jid, { 
+      text: '✅ הוסרת בהצלחה מרשימת התפוצה.\n\n🔇 לא תקבל עוד הודעות מהבוט.\n\n💬 אם תרצה לחדש את השירות - שלח לנו הודעה בעתיד.' 
+    });
+    console.log('User selected remove - marked as not interested:', jid);
+    
   } else {
-    await sock.sendMessage(jid, { text: 'לא זיהיתי את הבחירה. כתוב "menu" כדי לראות את האפשרויות.' });
+    // מקרה של בחירה לא מוכרת
+    await sock.sendMessage(jid, { 
+      text: '❓ לא זיהיתי את הבחירה.\n\n📝 כתוב "menu" כדי לראות את התפריט שוב.' 
+    });
   }
 }
 
@@ -266,21 +341,21 @@ async function handleFormProcess(sock, jid, msg) {
   if (userForm.step === 1) {
     userForm.data.name = t;
     userForm.step = 2;
-    await sock.sendMessage(jid, { text: '📍 תודה. אנא כתוב את הכתובת (רחוב, מספר, עיר):' });
+    await sock.sendMessage(jid, { text: '📍 *שלב 2/4:* תודה רבה!\n\nכעת אנא כתוב את הכתובת המלאה (רחוב, מספר בית, עיר):' });
     return;
   }
 
   if (userForm.step === 2) {
     userForm.data.address = t;
     userForm.step = 3;
-    await sock.sendMessage(jid, { text: '📞 עכשיו אנא כתוב את מספר הטלפון שלך:' });
+    await sock.sendMessage(jid, { text: '📞 *שלב 3/4:* מעולה!\n\nעכשיו אנא כתוב את מספר הטלפון שלך:' });
     return;
   }
 
   if (userForm.step === 3) {
     userForm.data.phone = t;
     userForm.step = 4;
-    await sock.sendMessage(jid, { text: '✉️ כעת פרט את הפניה בקצרה (תיאור הבקשה):' });
+    await sock.sendMessage(jid, { text: '✉️ *שלב 4/4:* כמעט סיימנו!\n\nכעת פרט את הפניה שלך בקצרה (תיאור הבעיה או הבקשה):' });
     return;
   }
 
@@ -305,11 +380,11 @@ async function handleFormProcess(sock, jid, msg) {
     }
     if (changeKeywords.includes(lower) || changeKeywords.includes(t)) {
       userForm.step = 'edit_select';
-      const editOptions = 'איזה שדה ברצונך לשנות? כתוב: שם / כתובת / טלפון / פירוט';
+      const editOptions = '🔧 *עריכת פרטים:*\n\nאיזה שדה ברצונך לשנות?\n\n📝 כתוב אחד מהבאים:\n• *שם* - לשינוי השם\n• *כתובת* - לשינוי הכתובת\n• *טלפון* - לשינוי הטלפון\n• *פירוט* - לשינוי תיאור הפניה';
       await sock.sendMessage(jid, { text: editOptions });
       return;
     }
-    await sock.sendMessage(jid, { text: 'לא הבנתי. האם לאשר את הפרטים או לשנות? כתוב "כן" לאישור או "שנה" לעריכה.' });
+    await sock.sendMessage(jid, { text: '❓ לא הבנתי את תגובתך.\n\n✅ כתוב *"כן"* לאישור הפניה\n🔧 או *"שנה"* לעריכת הפרטים' });
     return;
   }
 
@@ -318,28 +393,28 @@ async function handleFormProcess(sock, jid, msg) {
     if (lower.includes('שם')) {
       userForm.editingField = 'name';
       userForm.step = 'editing';
-      await sock.sendMessage(jid, { text: 'הכנס שם חדש:' });
+      await sock.sendMessage(jid, { text: '👤 *עריכת שם:*\n\nהכנס את השם החדש:' });
       return;
     }
     if (lower.includes('כתובת')) {
       userForm.editingField = 'address';
       userForm.step = 'editing';
-      await sock.sendMessage(jid, { text: 'הכנס כתובת חדשה:' });
+      await sock.sendMessage(jid, { text: '📍 *עריכת כתובת:*\n\nהכנס את הכתובת החדשה:' });
       return;
     }
     if (lower.includes('טלפון')) {
       userForm.editingField = 'phone';
       userForm.step = 'editing';
-      await sock.sendMessage(jid, { text: 'הכנס מספר טלפון חדש:' });
+      await sock.sendMessage(jid, { text: '📞 *עריכת טלפון:*\n\nהכנס את מספר הטלפון החדש:' });
       return;
     }
     if (lower.includes('פירט') || lower.includes('פירוט') || lower.includes('פרט')) {
       userForm.editingField = 'message';
       userForm.step = 'editing';
-      await sock.sendMessage(jid, { text: 'הכנס פירוט פניה חדש:' });
+      await sock.sendMessage(jid, { text: '✉️ *עריכת פירוט הפניה:*\n\nהכנס את התיאור החדש:' });
       return;
     }
-    await sock.sendMessage(jid, { text: 'לא זיהיתי את השדה. כתוב אחד מ: שם, כתובת, טלפון, פירוט.' });
+    await sock.sendMessage(jid, { text: '❓ לא זיהיתי את השדה שתרצה לשנות.\n\n📝 כתוב בדיוק אחד מהמילים הבאות:\n• שם\n• כתובת\n• טלפון\n• פירוט' });
     return;
   }
 
@@ -353,7 +428,7 @@ async function handleFormProcess(sock, jid, msg) {
       return;
     } else {
       userForm.step = 'edit_select';
-      await sock.sendMessage(jid, { text: 'אירעה שגיאה קטנה. איזה שדה תרצה לשנות? (שם/כתובת/טלפון/פירוט)' });
+      await sock.sendMessage(jid, { text: '⚠️ אירעה שגיאה קטנה.\n\nאיזה שדה תרצה לשנות? (שם/כתובת/טלפון/פירוט)' });
       return;
     }
   }
@@ -362,20 +437,27 @@ async function handleFormProcess(sock, jid, msg) {
   console.log('Unknown form step for user', jid, userForm);
   delete formUsers[jid];
   resetFormSessionTimer(jid);
-  await sock.sendMessage(jid, { text: 'אירעה שגיאה בתהליך. נא לשלוח "menu" כדי להתחיל שוב.' });
+  await sock.sendMessage(jid, { text: '⚠️ אירעה שגיאה בתהליך מילוי הטופס.\n\n📝 כתוב "menu" כדי להתחיל תהליך חדש.' });
 }
 
-// שולח סיכום ובקשת אישור למשתמש (טקסט בעברית)
+// שולח סיכום ובקשת אישור למשתמש (טקסט מעוצב בעברית)
 async function sendSummaryAndAskConfirmation(sock, jid, data) {
   const summary = [
-    '🔎 סיכום הפניה שלך:',
-    `👤 שם: ${data.name || 'לא סופק'}`,
-    `📍 כתובת: ${data.address || 'לא סופק'}`,
-    `📞 טלפון: ${data.phone || 'לא סופק'}`,
-    `✉️ פירוט: ${data.message || 'לא סופק'}`,
+    '📋 *סיכום הפניה שלך:*',
     '',
-    'האם לאשר את הפניה? כתוב "כן" לאישור או "שנה" כדי לערוך.'
+    `👤 *שם:* ${data.name || 'לא סופק'}`,
+    `📍 *כתובת:* ${data.address || 'לא סופק'}`,
+    `📞 *טלפון:* ${data.phone || 'לא סופק'}`,
+    `✉️ *פירוט הפניה:* ${data.message || 'לא סופק'}`,
+    '',
+    '─────────────────────',
+    '',
+    '🤔 *האם הפרטים נכונים?*',
+    '',
+    '✅ כתוב *"כן"* לאישור ושליחת הפניה',
+    '🔧 כתוב *"שנה"* לעריכת הפרטים'
   ].join('\n');
+  
   try {
     await sock.sendMessage(jid, { text: summary });
     console.log('Sent summary to', jid);
@@ -417,13 +499,17 @@ async function saveAndNotifyAdmin(sock, jid, data) {
 
   // שליחת הודעה למנהל - הלוג שיישלח הוא באנגלית
   const adminText = [
-    '📬 New request received:',
-    `User JID: ${entry.jid}`,
-    `Name: ${entry.name}`,
-    `Address: ${entry.address}`,
-    `Phone: ${entry.phone}`,
-    `Details: ${entry.message || 'N/A'}`,
-    `Time: ${entry.timestamp}`
+    '📬 *New Request Received* 📬',
+    '',
+    `👤 *User JID:* ${entry.jid}`,
+    `📝 *Name:* ${entry.name}`,
+    `📍 *Address:* ${entry.address}`,
+    `📞 *Phone:* ${entry.phone}`,
+    `✉️ *Details:* ${entry.message || 'N/A'}`,
+    `⏰ *Time:* ${entry.timestamp}`,
+    '',
+    '───────────────────────',
+    '🔔 *New request added to system*'
   ].join('\n');
 
   try {
@@ -433,32 +519,87 @@ async function saveAndNotifyAdmin(sock, jid, data) {
     console.error('Failed to send request to admin:', e?.message || e);
   }
 
-  // הודעה סופית למשתמש
+  // הודעה סופית מעוצבת למשתמש
+  const successMessage = [
+    '✅ *הפניה נרשמה בהצלחה!* ✅',
+    '',
+    '🎉 תודה רבה על פנייתך',
+    '📨 הפניה נשלחה למערכת שלנו',
+    '⏰ נחזור אליך בהקדם האפשרי',
+    '',
+    '───────────────────────',
+    '',
+    '💬 *רוצה לפתוח פניה נוספת?*',
+    'כתוב *"menu"* להצגת התפריט'
+  ].join('\n');
+
   try {
-    await sock.sendMessage(jid, { text: '✅ תודה! הפניה נרשמה ונשלחה למערכת. נחזור אליך בהקדם.' });
+    await sock.sendMessage(jid, { text: successMessage });
     console.log('Acknowledgement sent to user:', jid);
   } catch (e) {
     console.warn('Failed to send acknowledgement to user:', e?.message || e);
   }
 }
 
-// פקודות מיוחדות - ping, help, menu
+// פקודות מיוחדות - ping, help, menu + תמיכה במילות מפתח חדשות
 async function handleSpecialCommands(sock, jid, text) {
   if (!text) return false;
+  
   if (text === 'ping') {
-    await sock.sendMessage(jid, { text: '🏓 pong!' });
+    await sock.sendMessage(jid, { text: '🏓 pong! הבוט פועל תקין' });
     return true;
   }
+  
   if (text === 'help' || text === '/help') {
-    const help = '📋 פקודות: ping, help, menu\nניתן גם לשלוח 1 או 2 או לכתוב "מעונין" / "לא מעונין".';
+    const help = [
+      '📚 *מדריך הבוט:*',
+      '',
+      '🤖 אני בוט לרישום פניות',
+      '',
+      '📝 *פקודות זמינות:*',
+      '• *menu* - הצגת התפריט הראשי',
+      '• *ping* - בדיקת חיבור',
+      '• *help* - מדריך זה',
+      '',
+      '🎯 *מילות מפתח מהירות:*',
+      '• *פניה* - פתיחת טופס פניה',
+      '• *אתר* - קישור לאתר',
+      '• *תקנון* - קישור לתקנון',
+      '• *הסר* - הסרה מהרשימה',
+      '',
+      '💡 *טיפ:* השתמש בתפריט האינטראקטיבי לחוויה טובה יותר!'
+    ].join('\n');
     await sock.sendMessage(jid, { text: help });
     return true;
   }
+  
   if (text === 'menu') {
-    // שליחת התפריט רק במידה והמשתמש ביקש אותו במפורש
+    // שליחת התפריט האינטראקטיבי
     await sendWelcomeMenu(sock, jid);
     return true;
   }
+  
+  // מילות מפתח מהירות לפעולות שונות
+  if (text === 'פניה' || text === 'טופס' || text === '1') {
+    await processMenuSelection(sock, jid, 'form_request');
+    return true;
+  }
+  
+  if (text === 'אתר' || text === 'קישור' || text === '2') {
+    await processMenuSelection(sock, jid, 'website_link');
+    return true;
+  }
+  
+  if (text === 'תקנון' || text === '3') {
+    await processMenuSelection(sock, jid, 'terms_link');
+    return true;
+  }
+  
+  if (text === 'הסר' || text === 'עזוב' || text === '4') {
+    await processMenuSelection(sock, jid, 'remove_me');
+    return true;
+  }
+  
   return false;
 }
 
