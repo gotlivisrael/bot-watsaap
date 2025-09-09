@@ -1,5 +1,0 @@
-auth_info_baileys/
-git rm -r --cached auth_info_baileys/
-git commit -m "remove auth_info_baileys from git tracking"/
-form_data.json/
-
