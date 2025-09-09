@@ -1,4 +1,5 @@
-// index.js - מעודכן לפי הבקשות שלך
+// index.js - מעודכן לפי התסריט שלך
+// הערות בעברית נמצאות בתוך הקוד להסבר כל חלק
 const {
   default: makeWASocket,
   DisconnectReason,
@@ -8,12 +9,17 @@ const fs = require('fs');
 const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode-terminal');
 
-// admin JID - המספר שנתת: 0559555800 -> בינלאומי +972559555800
+// admin JID - הכנס כאן את ה-JID של המנהל (בפורמט בינלאומי ללא סימנים)
 const adminJid = '972559555800@s.whatsapp.net';
 
-const warnedUsers = new Set();
-const infoSentUsers = new Set(); // משתמשים שלא נענים יותר (לדוגמה: כתבו "לא מעונין")
+// ---------------------------
+// נתונים בזיכרון להרצת הבוט
+// ---------------------------
+// משתמשים שסומנו כ"לא מעוניין" - אל תענה להם יותר
+const infoSentUsers = new Set();
+// משתמשים שעוברים תהליך מילוי טופס - object keyed by jid
 const formUsers = {};
+// משתמשים שכבר קיבלו את הודעת הברכה הראשונית והתפריט
 const greetedUsers = new Set();
 
 async function connectToWhatsApp() {
@@ -26,11 +32,12 @@ async function connectToWhatsApp() {
 
   sock.ev.on('creds.update', saveCreds);
 
+  // connection updates - logged in English (system logs)
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      console.log('📱 סרוק את ה-QR הבא כדי להתחבר:');
+      console.log('QR generated - scan it to connect:');
       qrcode.generate(qr, { small: false });
     }
 
@@ -38,68 +45,69 @@ async function connectToWhatsApp() {
       const shouldReconnect = (lastDisconnect?.error instanceof Boom)
         ? lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut
         : false;
-      console.log('❌ החיבור נסגר:', lastDisconnect?.error, 'מתחבר מחדש:', shouldReconnect);
+      console.log('Connection closed:', lastDisconnect?.error, 'willReconnect:', shouldReconnect);
       if (shouldReconnect) connectToWhatsApp();
     } else if (connection === 'open') {
-      console.log('🎉 הבוט מחובר בהצלחה ל-WhatsApp!');
+      console.log('Connected to WhatsApp!');
     }
   });
 
+  // הודעות נכנסות
   sock.ev.on('messages.upsert', async (m) => {
     try {
       const msg = m.messages?.[0];
       if (!msg || !msg.message || msg.key?.fromMe) return;
 
       const jid = msg.key.remoteJid;
-      if (!jid || !jid.endsWith('@s.whatsapp.net')) return; // רק צ'אטים פרטיים
-
-      const rawText = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
-      const t = (rawText || '').toString().toLowerCase().trim();
-      console.log('📨 הודעה נכנסת מ:', jid, '| raw:', rawText, '| normalized:', t);
-
-      // אזהרה ראשונית - פעם אחת
-      if (!warnedUsers.has(jid)) {
-        await sock.sendMessage(jid, { text: 'זהו מענה אוטמטי מבוט שנמצא בתהליכי פיתוח אפשר להגיב לו' });
-        warnedUsers.add(jid);
-      }
-
-      // אם המשתמש כבר סומן כ"לא מעונין" - לא נענה לו יותר
-      if (infoSentUsers.has(jid)) {
-        console.log('ℹ️ לא מגיבים ל:', jid, '(מסומן כלא מעונין)');
+      // רק צ'אטים פרטיים - סינון
+      if (!jid || !jid.endsWith('@s.whatsapp.net')) {
+        console.log('Ignored message - not a private chat:', jid);
         return;
       }
 
-      // אם באמצע טופס - המשך
+      // קבלת טקסט גולמי (פשוטות - תומך בהודעות טקסט רגילות וב-extendedText)
+      const rawText = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+      const t = (rawText || '').toString().toLowerCase().trim();
+      console.log('Incoming message from:', jid, '| raw:', rawText, '| normalized:', t);
+
+      // אם המשתמש כבר סומן כ"לא מעוניין" - לא נענה לו יותר
+      if (infoSentUsers.has(jid)) {
+        console.log('User marked as not interested - ignoring:', jid);
+        return;
+      }
+
+      // אם המשתמש באמצע מילוי טופס - המשך התהליך
       if (formUsers[jid]) {
         await handleFormProcess(sock, jid, msg);
         return;
       }
 
-      // 1) תגובת רשימה אינטראקטיבית
+      // בחירת פריט מתוך LIST אינטראקטיבי
       if (msg.message.listResponseMessage) {
         const selectedId = msg.message.listResponseMessage.singleSelectReply?.selectedRowId
           || msg.message.listResponseMessage.selectedRowId;
-        console.log('🔘 listResponseMessage selectedId =', selectedId);
+        console.log('ListResponse selectedId =', selectedId);
         if (selectedId) {
           await processMenuSelection(sock, jid, selectedId);
           return;
         }
       }
 
-      // 2) תגובת כפתור
+      // בחירת כפתור אינטראקטיבי
       if (msg.message.buttonsResponseMessage) {
         const sel = msg.message.buttonsResponseMessage.selectedButtonId;
-        console.log('🔘 buttonsResponseMessage selectedButtonId =', sel);
+        console.log('ButtonsResponse selectedButtonId =', sel);
         if (sel) {
           await processMenuSelection(sock, jid, sel);
           return;
         }
       }
 
-      // 3) פקודות טקסט רגילות או מילים חופשי
-      // תמיכה בבחירות חופשיות של המשתמש: "מעונין", "לא מעונין", "1", "2"
-      // מילים בעברית בשצורת המשתמשים
-      const wantsKeywords = ['1', 'מעונין', 'מעונין לפתוח פניה', 'מעוניין', 'מעוניין לפתוח פניה', 'טופס', 'השאר פניה'];
+      // פקודות מיוחדות: ping, help, menu
+      if (await handleSpecialCommands(sock, jid, t)) return;
+
+      // מילות מפתח חופשיות לתחילת הטופס או לסימון "לא מעונין"
+      const wantsKeywords = ['1', 'מעונין', 'מעוניין', 'מעונין לפתוח פניה', 'מעוניין לפתוח פניה', 'טופס', 'השאר פניה', 'מעוניין לפתוח פנייה', 'מעוניין לפתוח פניה'];
       const noKeywords = ['2', 'לא מעונין', 'לא מעוניין', 'לא מעונין לפתוח פניה', 'לא מעוניין לפתוח פניה', 'אין'];
 
       if (wantsKeywords.includes(t)) {
@@ -107,24 +115,22 @@ async function connectToWhatsApp() {
         return;
       }
       if (noKeywords.includes(t)) {
-        // אם המשתמש כותב "לא מעונין" - נסמן אותו ולא נגיב לו שוב
+        // סימון כ"לא מעונין" - לא נענה לו יותר
         infoSentUsers.add(jid);
-        console.log('ℹ️ משתמש סימן כלא מעונין:', jid);
-        return; // לא שולחים תשובה
+        console.log('User marked as not interested by text:', jid);
+        return; // לא שולחים שום הודעה חזרה
       }
 
-      // תמיכה בפקודות מהירות
-      if (await handleSpecialCommands(sock, jid, t)) return;
-
-      // אם המשתמש עדיין לא קיבל תפריט - שלח תפריט + טקסט גיבוי
+      // אם המשתמש טרם קיבל הודעת ברכה ותפריט - שלח אותם כמשתמש חדש
       if (!greetedUsers.has(jid)) {
+        await sendInitialGreeting(sock, jid);
         await sendWelcomeMenu(sock, jid);
         greetedUsers.add(jid);
         return;
       }
 
-      // אחרת לא מגיבים
-      console.log('— לא נעשתה פעולה נוספת על ההודעה הזו');
+      // בכל שאר המקרים - אין תגובה (כל ההודעות שלא מתאימות ל-flow לא מקבלות תגובה)
+      console.log('No action for this message - not matching any flow or command.');
     } catch (err) {
       console.error('message handler error', err);
     }
@@ -133,11 +139,29 @@ async function connectToWhatsApp() {
   return sock;
 }
 
-// שולח LIST אינטראקטיבי + טקסט גיבוי - כותרות שונו לפי בקשתך
+// ---------------------------
+// שליחת הודעת פתיחה ראשונית למשתמש חדש
+// בהתאם לתסריט: כל משתמש חדש מקבל הודעה זו
+// ---------------------------
+async function sendInitialGreeting(sock, jid) {
+  // הודעה ראשונית כפי שביקשת
+  const greeting = "שלום! אני בוט אוטומטי לרישום פניות. אם ברצונך להשאיר פניה, השב 'מעוניין'. אם לא מעוניין - השב 'לא מעוניין'.";
+  try {
+    await sock.sendMessage(jid, { text: greeting });
+    console.log('Sent initial greeting to:', jid);
+  } catch (e) {
+    console.warn('Failed to send initial greeting to', jid, e?.message || e);
+  }
+}
+
+// ---------------------------
+// שולח LIST אינטראקטיבי + טקסט גיבוי
+// ---------------------------
 async function sendWelcomeMenu(sock, jid) {
+  // הערות בעברית: פה אנו שולחים את התפריט הראשי כ-LIST - ואם זה לא נתמך נתן fallback טקסט
   const listMsg = {
     text: '👋 שלום וברוך הבא!\nבחר פעולה:',
-    footer: 'בוט לדוגמה',
+    footer: 'בוט רישום פניות',
     title: 'תפריט ראשי',
     buttonText: 'פתח תפריט',
     sections: [
@@ -155,83 +179,242 @@ async function sendWelcomeMenu(sock, jid) {
   try {
     await sock.sendMessage(jid, { listMessage: listMsg });
     await sock.sendMessage(jid, { text: fallback });
-    console.log('✅ נשלח listMessage + fallback ל-', jid);
+    console.log('Sent listMessage + fallback to:', jid);
   } catch (e) {
-    console.warn('⚠ listMessage לא עבר - שולח רק טקסט גיבוי:', e?.message || e);
+    console.warn('listMessage failed - sending fallback text only:', e?.message || e);
     await sock.sendMessage(jid, { text: fallback });
   }
 }
 
-// עיבוד בחירה מהתפריט
+// ---------------------------
+// עיבוד בחירת תפריט
+// ---------------------------
 async function processMenuSelection(sock, jid, selectedId) {
   console.log('processMenuSelection', jid, selectedId);
   if (selectedId === 'form_request') {
-    formUsers[jid] = { step: 1 };
+    // אתחול טופס חדש - שלב 1: שם מלא
+    formUsers[jid] = { step: 1, data: {} };
     await sock.sendMessage(jid, { text: '✍️ מצוין! מה השם המלא שלך?' });
   } else if (selectedId === 'info_request') {
-    // משתמש בחר "לא מעונין" - לא נענה לו שוב
+    // משתמש בחר "לא מעונין" - נסמן אותו ולא ייענה שוב
     infoSentUsers.add(jid);
-    console.log('ℹ️ המשתמש בחר לא מעונין, מסומן ולא ייענה שוב:', jid);
-    // שים לב: לא שולחים לו הודעה לפי בקשתך
+    console.log('User selected not interested - marked and will not be replied to:', jid);
+    // לפי התסריט - לא שולחים הודעה במענה
   } else {
     await sock.sendMessage(jid, { text: 'לא זיהיתי את הבחירה. כתוב "menu" כדי לראות את האפשרויות.' });
   }
 }
 
+// ---------------------------
+// תהליך מילוי הטופס - 4 שאלות + אישור/עריכה
+// שלבים:
+// step 1 - name
+// step 2 - address
+// step 3 - phone
+// step 4 - details (פירוט)
+// step 'confirm' - שליחת סיכום ובקשה לאישור או שינוי
+// step 'edit_select' - שואל איזה שדה לשנות
+// step 'editing' - מקבל את הערך החדש ואז חוזר ל-'confirm'
+// ---------------------------
 async function handleFormProcess(sock, jid, msg) {
   const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+  const t = (text || '').toString().trim();
   const userForm = formUsers[jid];
   if (!userForm) return;
 
+  // מילים המאשרות או מבקשות לשנות
+  const confirmKeywords = ['כן', 'מאשר', 'אישור', 'ok', 'בסדר', 'כן!'];
+  const changeKeywords = ['שנה', 'ערוך', 'לשנות', 'לא', 'שינוי'];
+
+  // אם אנחנו בצעדים מספריים
   if (userForm.step === 1) {
-    userForm.name = text;
+    // שלב שם
+    userForm.data.name = t;
     userForm.step = 2;
-    await sock.sendMessage(jid, { text: '📞 עכשיו אנא כתוב את מספר הטלפון שלך:' });
+    await sock.sendMessage(jid, { text: '📍 תודה. אנא כתוב את הכתובת (רחוב, מספר, עיר):' });
     return;
   }
 
   if (userForm.step === 2) {
-    userForm.phone = text;
+    // שלב כתובת
+    userForm.data.address = t;
     userForm.step = 3;
-    await sock.sendMessage(jid, { text: '✉️ כעת פרט את הפניה בקצרה:' });
+    await sock.sendMessage(jid, { text: '📞 עכשיו אנא כתוב את מספר הטלפון שלך:' });
     return;
   }
 
   if (userForm.step === 3) {
-    userForm.message = text;
-    const entry = { jid, ...userForm, timestamp: new Date().toISOString() };
+    // שלב טלפון
+    userForm.data.phone = t;
+    userForm.step = 4;
+    await sock.sendMessage(jid, { text: '✉️ כעת פרט את הפניה בקצרה (תיאור הבקשה):' });
+    return;
+  }
 
-    // שמירה ל־JSON
-    let data = [];
-    if (fs.existsSync('form_data.json')) {
-      try { data = JSON.parse(fs.readFileSync('form_data.json')); } catch (e) { data = []; }
+  if (userForm.step === 4) {
+    // שלב פירוט פניה - לאחריו נעבור למסך סיכום ואישור
+    userForm.data.message = t;
+    userForm.step = 'confirm';
+    await sendSummaryAndAskConfirmation(sock, jid, userForm.data);
+    return;
+  }
+
+  // שלב אישור / שינוי
+  if (userForm.step === 'confirm') {
+    const lower = t.toLowerCase();
+    if (confirmKeywords.includes(lower) || confirmKeywords.includes(t)) {
+      // המשתמש מאשר - שמירה ושליחה למנהל
+      await saveAndNotifyAdmin(sock, jid, userForm.data);
+      delete formUsers[jid];
+      return;
     }
-    data.push(entry);
-    fs.writeFileSync('form_data.json', JSON.stringify(data, null, 2));
-    console.log('✅ טופס נשמר ל־form_data.json:', entry);
-
-    // שליחה אוטומטית למנהל (adminJid)
-    const adminText = [
-      '📬 פניה חדשה התקבלה:',
-      `🆔 משתמש: ${entry.jid}`,
-      `👤 שם: ${entry.name}`,
-      `📞 טלפון: ${entry.phone}`,
-      `✉️ פרטי הפניה: ${entry.message || 'לא סופק'}`,
-      `🕒 זמן: ${entry.timestamp}`
-    ].join('\n');
-
-    try {
-      await sock.sendMessage(adminJid, { text: adminText });
-      console.log('✅ הודעת פניה נשלחה ל-admin:', adminJid);
-    } catch (e) {
-      console.error('❌ שגיאה בשליחת הפניה ל-admin:', e?.message || e);
+    if (changeKeywords.includes(lower) || changeKeywords.includes(t)) {
+      // משתמש רוצה לשנות - נשאל איזה שדה לשנות
+      userForm.step = 'edit_select';
+      const editOptions = 'איזה שדה ברצונך לשנות? כתוב: שם / כתובת / טלפון / פירוט';
+      await sock.sendMessage(jid, { text: editOptions });
+      return;
     }
+    // אם לא ברור - נבקש תשובה ברורה
+    await sock.sendMessage(jid, { text: 'לא הבנתי. האם לאשר את הפרטים או לשנות? כתוב "כן" לאישור או "שנה" לעריכה.' });
+    return;
+  }
 
-    delete formUsers[jid];
-    await sock.sendMessage(jid, { text: '✅ תודה! הפניה נפתחה בהצלחה. נחזור אליך בקרוב.' });
+  if (userForm.step === 'edit_select') {
+    const lower = t.toLowerCase();
+    // קבלת השדה המבוקש לעריכה
+    if (lower.includes('שם')) {
+      userForm.editingField = 'name';
+      userForm.step = 'editing';
+      await sock.sendMessage(jid, { text: 'הכנס שם חדש:' });
+      return;
+    }
+    if (lower.includes('כתובת')) {
+      userForm.editingField = 'address';
+      userForm.step = 'editing';
+      await sock.sendMessage(jid, { text: 'הכנס כתובת חדשה:' });
+      return;
+    }
+    if (lower.includes('טלפון')) {
+      userForm.editingField = 'phone';
+      userForm.step = 'editing';
+      await sock.sendMessage(jid, { text: 'הכנס מספר טלפון חדש:' });
+      return;
+    }
+    if (lower.includes('פירט') || lower.includes('פירוט') || lower.includes('פרט')) {
+      userForm.editingField = 'message';
+      userForm.step = 'editing';
+      await sock.sendMessage(jid, { text: 'הכנס פירוט פניה חדש:' });
+      return;
+    }
+    await sock.sendMessage(jid, { text: 'לא זיהיתי את השדה. כתוב אחד מ: שם, כתובת, טלפון, פירוט.' });
+    return;
+  }
+
+  if (userForm.step === 'editing') {
+    // עדכון השדה שנבחר
+    const field = userForm.editingField;
+    if (field) {
+      userForm.data[field] = t;
+      delete userForm.editingField;
+      userForm.step = 'confirm';
+      // לאחר העדכון - מציגים שוב סיכום ובקשת אישור
+      await sendSummaryAndAskConfirmation(sock, jid, userForm.data);
+      return;
+    } else {
+      // מצב תקלה - נבקש לבחור שדה שוב
+      userForm.step = 'edit_select';
+      await sock.sendMessage(jid, { text: 'אירעה שגיאה קטנה. איזה שדה תרצה לשנות? (שם/כתובת/טלפון/פירוט)' });
+      return;
+    }
+  }
+
+  // אם הגענו לכאן - אין מצב ידוע; ננקה ונציג הודעת שגיאה
+  console.log('Unknown form step for user', jid, userForm);
+  delete formUsers[jid];
+  await sock.sendMessage(jid, { text: 'אירעה שגיאה בתהליך. נא לשלוח "menu" כדי להתחיל שוב.' });
+}
+
+// שולח סיכום ובקשת אישור למשתמש (טקסט בעברית)
+async function sendSummaryAndAskConfirmation(sock, jid, data) {
+  const summary = [
+    '🔎 סיכום הפניה שלך:',
+    `👤 שם: ${data.name || 'לא סופק'}`,
+    `📍 כתובת: ${data.address || 'לא סופק'}`,
+    `📞 טלפון: ${data.phone || 'לא סופק'}`,
+    `✉️ פירוט: ${data.message || 'לא סופק'}`,
+    '',
+    'האם לאשר את הפניה? כתוב "כן" לאישור או "שנה" כדי לערוך.'
+  ].join('\n');
+  try {
+    await sock.sendMessage(jid, { text: summary });
+    console.log('Sent summary to', jid);
+  } catch (e) {
+    console.warn('Failed to send summary to', jid, e?.message || e);
   }
 }
 
+// שמירת הפניה ל־form_data.json ושליחה למנהל
+async function saveAndNotifyAdmin(sock, jid, data) {
+  const entry = {
+    jid,
+    name: data.name || '',
+    address: data.address || '',
+    phone: data.phone || '',
+    message: data.message || '',
+    timestamp: new Date().toISOString()
+  };
+
+  // קריאה ושמירה לקובץ JSON
+  let all = [];
+  try {
+    if (fs.existsSync('form_data.json')) {
+      const raw = fs.readFileSync('form_data.json', 'utf8');
+      all = JSON.parse(raw || '[]');
+    }
+  } catch (e) {
+    console.warn('Could not read form_data.json, starting new array:', e?.message || e);
+    all = [];
+  }
+
+  all.push(entry);
+  try {
+    fs.writeFileSync('form_data.json', JSON.stringify(all, null, 2), 'utf8');
+    console.log('Form saved to form_data.json:', entry);
+  } catch (e) {
+    console.error('Failed to write form_data.json:', e?.message || e);
+  }
+
+  // שליחה למנהל - הטקסט באנגלית או בעברית? נשלח בעברית כאן אבל הלוג למערכת באנגלית
+  const adminText = [
+    '📬 New request received:',
+    `User JID: ${entry.jid}`,
+    `Name: ${entry.name}`,
+    `Address: ${entry.address}`,
+    `Phone: ${entry.phone}`,
+    `Details: ${entry.message || 'N/A'}`,
+    `Time: ${entry.timestamp}`
+  ].join('\n');
+
+  try {
+    await sock.sendMessage(adminJid, { text: adminText });
+    console.log('Sent request to admin:', adminJid);
+  } catch (e) {
+    console.error('Failed to send request to admin:', e?.message || e);
+  }
+
+  // הודעה סופית למשתמש
+  try {
+    await sock.sendMessage(jid, { text: '✅ תודה! הפניה נרשמה ונשלחה למערכת. נחזור אליך בהקדם.' });
+    console.log('Acknowledgement sent to user:', jid);
+  } catch (e) {
+    console.warn('Failed to send acknowledgement to user:', e?.message || e);
+  }
+}
+
+// ---------------------------
+// פקודות מיוחדות - ping, help, menu
+// ---------------------------
 async function handleSpecialCommands(sock, jid, text) {
   if (!text) return false;
   if (text === 'ping') {
@@ -251,4 +434,4 @@ async function handleSpecialCommands(sock, jid, text) {
 }
 
 // הפעלה
-connectToWhatsApp().catch(err => console.error('שגיאה בחיבור:', err));
+connectToWhatsApp().catch(err => console.error('Connection error:', err));
