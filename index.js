@@ -22,6 +22,44 @@ const formUsers = {};
 // משתמשים שכבר קיבלו את הודעת הברכה הראשונית
 const greetedUsers = new Set();
 
+// ---------------------------------
+// טיימרים לניהול סשן טופס
+// ---------------------------------
+const formTimeouts = {}; // { jid: timeoutId }
+const FORM_SESSION_TIMEOUT = 0.5 * 60 * 1000; // 10 דקות (ניתן לשנות)
+
+// אתחול/הפעלת טיימר לסשן חדש
+async function startFormSession(sock, jid) {
+  // מחיקת טיימר קודם אם קיים
+  if (formTimeouts[jid]) clearTimeout(formTimeouts[jid]);
+
+  // יצירת טיימר חדש
+  formTimeouts[jid] = setTimeout(async () => {
+    try {
+      // שליחת הודעה על סגירת הפניה עקב חוסר מענה
+      await sock.sendMessage(jid, { text: '⚠️ הפניה נסגרה עקב חוסר מענה.' });
+      console.log('Form session expired for', jid);
+    } catch (e) {
+      console.warn('Failed to notify user about session expiry:', jid, e?.message || e);
+    } finally {
+      // הסרה מהזיכרון
+      delete formUsers[jid];
+      delete formTimeouts[jid];
+    }
+  }, FORM_SESSION_TIMEOUT);
+}
+
+// ביטול ואיפוס טיימר כאשר המשתמש מתקדם או מאשר את הטופס
+function resetFormSessionTimer(jid) {
+  if (formTimeouts[jid]) {
+    clearTimeout(formTimeouts[jid]);
+    delete formTimeouts[jid];
+  }
+}
+
+// ---------------------------------
+// חיבור ל-WhatsApp והאזנה להודעות
+// ---------------------------------
 async function connectToWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info_baileys');
 
@@ -194,6 +232,9 @@ async function processMenuSelection(sock, jid, selectedId) {
     // אתחול טופס חדש - שלב 1: שם מלא
     formUsers[jid] = { step: 1, data: {} };
     await sock.sendMessage(jid, { text: '✍️ מצוין! מה השם המלא שלך?' });
+
+    // אתחול טיימר סשן
+    await startFormSession(sock, jid);
   } else if (selectedId === 'info_request') {
     // משתמש בחר "לא מעונין" - נסמן אותו ולא ייענה שוב
     infoSentUsers.add(jid);
@@ -212,6 +253,10 @@ async function handleFormProcess(sock, jid, msg) {
   const t = (text || '').toString().trim();
   const userForm = formUsers[jid];
   if (!userForm) return;
+
+  // איפוס טיימר בכל תגובה של המשתמש (מאריך את הסשן)
+  resetFormSessionTimer(jid);
+  await startFormSession(sock, jid);
 
   // מילים המאשרות או מבקשות לשנות
   const confirmKeywords = ['כן', 'מאשר', 'אישור', 'ok', 'בסדר', 'כן!'];
@@ -250,8 +295,12 @@ async function handleFormProcess(sock, jid, msg) {
   if (userForm.step === 'confirm') {
     const lower = t.toLowerCase();
     if (confirmKeywords.includes(lower) || confirmKeywords.includes(t)) {
+      // אישור סופי - שמירה ושליחה למנהל
       await saveAndNotifyAdmin(sock, jid, userForm.data);
+
+      // הסרת הטופס מהזיכרון וביטול הטיימר
       delete formUsers[jid];
+      resetFormSessionTimer(jid);
       return;
     }
     if (changeKeywords.includes(lower) || changeKeywords.includes(t)) {
@@ -312,6 +361,7 @@ async function handleFormProcess(sock, jid, msg) {
   // במקרה של מצב לא ידוע - ננקה ונשיב למשתמש כיצד להמשיך
   console.log('Unknown form step for user', jid, userForm);
   delete formUsers[jid];
+  resetFormSessionTimer(jid);
   await sock.sendMessage(jid, { text: 'אירעה שגיאה בתהליך. נא לשלוח "menu" כדי להתחיל שוב.' });
 }
 
