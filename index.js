@@ -59,7 +59,7 @@ async function connectToWhatsApp() {
 
       // אזהרה ראשונית - פעם אחת
       if (!warnedUsers.has(jid)) {
-        await sock.sendMessage(jid, { text: '⚠️ הודעה אוטומטית מבוט - נמצא בתהליכי פיתוח.' });
+        await sock.sendMessage(jid, { text: 'זהו מענה אוטמטי מבוט שנמצא בתהליכי פיתוח אפשר להגיב לו' });
         warnedUsers.add(jid);
       }
 
